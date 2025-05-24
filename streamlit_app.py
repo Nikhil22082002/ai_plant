@@ -5,7 +5,7 @@ from graph_builder import app  # LangGraph app with compiled workflow
 
 st.set_page_config(page_title="Math Agent", layout="centered")
 
-st.title("🧮 Math Problem Solver")
+st.title("Math Problem Solver")
 st.markdown("Ask any math-related question. The agent will try to solve it using its knowledge base or the web.")
 
 query = st.text_input("Enter your math question:")
@@ -43,7 +43,7 @@ if st.button("Get Solution"):
 
 # Show feedback UI if we have a solution
 if st.session_state.get("feedback_stage", False):
-    st.markdown("### 🤖 Was the solution helpful?")
+    st.markdown("###  Was the solution helpful?")
     feedback = st.radio("Your feedback:", ["Yes", "No", "Improve"])
 
     if feedback == "Improve":
