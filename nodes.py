@@ -1,34 +1,18 @@
-# crate the logic for the nodes in the graph
 import requests
 from bs4 import BeautifulSoup
 from tavily import TavilyClient
 from typing import List, Dict
 import json
 
-# For Qdrant
-from qdrant_client import QdrantClient, models
-from sentence_transformers import SentenceTransformer
-
 # Import API key from config
-from config import TAVILY_API_KEY,gemeni_key
+from config import TAVILY_API_KEY, gemeni_key
 
 # Initialize Tavily client
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
 
-# --- Qdrant Configuration ---
-QDRANT_HOST = "localhost"
-QDRANT_PORT = 6333
-QDRANT_COLLECTION_NAME = "math_problems"
-
-# Initialize Qdrant client
-qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
-
 # Initialize Sentence Transformer model for embeddings
 # This model will be downloaded the first time it's used.
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# --- Knowledge Base (Initial - Now stored in Qdrant) ---
-# This dictionary will be used to populate Qdrant.
 # We'll no longer do direct dictionary lookups for retrieval.
 initial_knowledge_base_data = {
     "Solve for x: 2x + 5 = 11": "Step 1: Subtract 5 from both sides: 2x = 6.\nStep 2: Divide by 2: x = 3.\nFinal Answer: x = 3",
@@ -37,47 +21,6 @@ initial_knowledge_base_data = {
     "What is the derivative of x^2?": "Step 1: Use the power rule: d/dx (x^n) = n*x^(n-1).\nStep 2: Apply the rule with n=2: d/dx (x^2) = 2*x^(2-1) = 2x^1.\nFinal Answer: 2x",
     "What is the integral of x dx?": "Step 1: Use the power rule for integrals: ∫x^n dx = (x^(n+1))/(n+1) + C.\nStep 2: Apply the rule with n=1: ∫x^1 dx = (x^(1+1))/(1+1) + C = x^2/2 + C.\nFinal Answer: x^2/2 + C"
 }
-
-def initialize_qdrant_knowledge_base():
-    """
-    Initializes the Qdrant collection and populates it with knowledge base data.
-    This function should ideally be called once at application startup.
-    """
-    print(f"[Qdrant Init] Checking for collection: {QDRANT_COLLECTION_NAME}")
-    try:
-        # Check if collection exists
-        qdrant_client.get_collection(collection_name=QDRANT_COLLECTION_NAME)
-        print(f"[Qdrant Init] Collection '{QDRANT_COLLECTION_NAME}' already exists.")
-    except Exception: # Collection not found, create it
-        print(f"[Qdrant Init] Collection '{QDRANT_COLLECTION_NAME}' not found. Creating...")
-        qdrant_client.recreate_collection(
-            collection_name=QDRANT_COLLECTION_NAME,
-            vectors_config=models.VectorParams(size=embedding_model.get_sentence_embedding_dimension(), distance=models.Distance.COSINE),
-        )
-        print(f"[Qdrant Init] Collection '{QDRANT_COLLECTION_NAME}' created.")
-
-        # Add data to the collection
-        points = []
-        for i, (question, answer) in enumerate(initial_knowledge_base_data.items()):
-            embedding = embedding_model.encode(question).tolist()
-            points.append(
-                models.PointStruct(
-                    id=i,
-                    vector=embedding,
-                    payload={"question": question, "answer": answer}
-                )
-            )
-
-        print(f"[Qdrant Init] Upserting {len(points)} points to Qdrant...")
-        qdrant_client.upsert(
-            collection_name=QDRANT_COLLECTION_NAME,
-            points=points,
-            wait=True
-        )
-        print(f"[Qdrant Init] Knowledge base populated in Qdrant.")
-
-# Call the initialization function once when the module is imported
-initialize_qdrant_knowledge_base()
 
 
 # --- Node Functions ---
@@ -102,37 +45,16 @@ def check_math_related_node(state: Dict):
         print(f"[{check_math_related_node.__name__}] Query is NOT math-related.")
         return {"error": "This agent is designed for mathematical questions. Please ask a math-related query."}
 
+
 def retrieve_from_knowledge_base_node(state: Dict):
     """
-    Retrieves solution from Qdrant knowledge base using semantic search.
-    Returns: "kb_hit" or "kb_miss" for conditional routing.
+    Retrieves an answer directly from the knowledge base dictionary if the query is an exact match.
     """
     query = state["query"]
-    kb_result = "" # Initialize as empty string
+    kb_result = initial_knowledge_base_data.get(query, "")  # Returns "" if no exact match
+    print(f"[retrieve_from_knowledge_base_node] Direct dictionary lookup for: {query}. Result: {kb_result}")
+    return {"kb_result": kb_result}
 
-    print(f"[{retrieve_from_knowledge_base_node.__name__}] Performing semantic search in Qdrant for: {query}")
-    try:
-        query_embedding = embedding_model.encode(query).tolist()
-
-        search_result = qdrant_client.search(
-            collection_name=QDRANT_COLLECTION_NAME,
-            query_vector=query_embedding,
-            limit=1 # Get the top 1 most relevant result
-        )
-
-        if search_result and search_result[0].score > 0.8: # Use a score threshold for relevance
-            # If a sufficiently relevant result is found, retrieve its answer
-            kb_result = search_result[0].payload.get("answer", "")
-            print(f"[{retrieve_from_knowledge_base_node.__name__}] Found relevant answer in Qdrant (score: {search_result[0].score:.2f}).")
-        else:
-            print(f"[{retrieve_from_knowledge_base_node.__name__}] No sufficiently relevant answer found in Qdrant.")
-
-    except Exception as e:
-        print(f"[{retrieve_from_knowledge_base_node.__name__}] Error during Qdrant search: {e}")
-        # In case of Qdrant error, treat as KB miss
-        kb_result = ""
-
-    return {"kb_result": kb_result} # Return empty string if no relevant result or error
 
 def perform_web_search_node(state: Dict):
     """
@@ -153,6 +75,7 @@ def perform_web_search_node(state: Dict):
         print(f"[{perform_web_search_node.__name__}] Error during Tavily web search: {e}. Make sure your API key is correct and you have internet access.")
         return {"error": f"Web search failed: {e}"}
 
+
 def extract_from_web_results_node(state: Dict):
     """
     Extracts relevant information from Tavily search results.
@@ -167,6 +90,7 @@ def extract_from_web_results_node(state: Dict):
     print(f"[{extract_from_web_results_node.__name__}] Extracted Text from Tavily (Snippet):\n", extracted_text[:700])
     return {"extracted_content": extracted_text}
 
+
 async def generate_solution_node(state: Dict):
     """
     Generates a solution using an LLM (gemini-2.0-flash).
@@ -176,11 +100,11 @@ async def generate_solution_node(state: Dict):
     query = state["query"]
     kb_result = state.get("kb_result")
     extracted_content = state.get("extracted_content")
-    feedback = state.get("feedback") # Get feedback from state if available
+    feedback = state.get("feedback")  # Get feedback from state if available
 
     solution_text = ""
 
-    if kb_result: # kb_result will be a non-empty string if found
+    if kb_result:  # kb_result will be a non-empty string if found
         print(f"[{generate_solution_node.__name__}] Generating solution from Knowledge Base.")
         solution_text = kb_result
     elif extracted_content:
@@ -207,21 +131,19 @@ async def generate_solution_node(state: Dict):
 
         llm_prompt += "Please provide the solution now:"
 
-
         chatHistory = []
-        # Corrected from .push() to .append()
-        chatHistory.append({ "role": "user", "parts": [{ "text": llm_prompt }] })
-        payload = { "contents": chatHistory }
-        apiKey = gemeni_key # Canvas will provide this at runtime
+        chatHistory.append({"role": "user", "parts": [{"text": llm_prompt}]})
+        payload = {"contents": chatHistory}
+        apiKey = gemeni_key  # Canvas will provide this at runtime
         apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}"
 
         try:
             response = requests.post(apiUrl, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
-            response.raise_for_status() # Raise an exception for bad status codes
+            response.raise_for_status()  # Raise an exception for bad status codes
             result = response.json()
 
             if result.get('candidates') and result['candidates'][0].get('content') and \
-               result['candidates'][0]['content'].get('parts') and result['candidates'][0]['content']['parts'][0].get('text'):
+                    result['candidates'][0]['content'].get('parts') and result['candidates'][0]['content']['parts'][0].get('text'):
                 solution_text = result['candidates'][0]['content']['parts'][0]['text']
             else:
                 solution_text = "LLM could not generate a solution from the provided information due to an unexpected response format."
